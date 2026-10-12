@@ -1,11 +1,13 @@
 ---
 name: claude-cleanup-windows
-description: Windows 下审计、备份、缓存清理、卸载和验收 Claude Code / Claude Desktop；覆盖 NVM4W、Claude in Chrome Native Host、重复 Appx/MSIX、Cowork 服务和本地登录态。默认保护 skills/plugins/projects/settings/Git/SSH/代理及设备标识。
+description: Windows 下审计、备份、缓存清理、卸载和验收 Claude Code / Claude Desktop；覆盖 NVM4W、Claude in Chrome Native Host、重复 Appx/MSIX、Cowork 服务、本地登录态，以及重启后/浏览器启动后的回生验证。
 ---
 
 # Claude Cleanup for Windows
 
 本 Skill 用于 Windows 上 Claude Code / Claude Desktop 的排障、干净卸载、缓存清理和重装前检查。
+
+从 v1.1 开始，“文件和路径已删除”不再等于最终验收通过。完整卸载只有在重启 Windows 后重新检查一次，并在启动 Chrome 后再次确认 Claude Native Host 没有被重新拉起，才算最终通过。
 
 ## 安全边界
 
@@ -15,9 +17,13 @@ description: Windows 下审计、备份、缓存清理、卸载和验收 Claude 
 
 ## 标准模式
 
-Audit：只读审计。
+Audit：只读审计当前状态。
 
     powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode Audit
+
+Validate：即时验收当前状态。它不证明“重启后不会回生”。
+
+    powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode Validate
 
 CleanCache：清理可再生缓存/日志。
 
@@ -31,13 +37,64 @@ UninstallDesktop：卸载当前用户的所有 Claude Desktop Appx/MSIX 包。
 
     powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode UninstallDesktop -ConfirmToken UNINSTALL-DESKTOP
 
-FullUninstall：保护资产快照、卸载 Code/Desktop、直接移除废弃的本地登录态、清缓存、清 Native Host、最终验收。
+FullUninstall：保护资产快照、卸载 Code/Desktop、移除废弃本地登录态、清缓存、清 Native Host，并自动创建“重启前基线”。
 
     powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode FullUninstall -IncludeLargeRuntime -ConfirmToken FULL-UNINSTALL
 
-Validate：只读验收。
+FullUninstall 返回 FinalAcceptancePending=true 时，表示即时清理完成，但最终验收还没有完成。
 
-    powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode Validate
+PrepareRebootValidation：单独记录一次重启前基线。
+
+    powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode PrepareRebootValidation
+
+PostRebootValidate：重启 Windows 后执行。只有检测到系统 BootTime 确实晚于基线 BootTime，才允许进入 PASS 判定。
+
+    powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode PostRebootValidate
+
+PostBrowserValidate：PostRebootValidate 通过后，实际启动 Chrome，等待数秒，再检查 Claude Native Host 是否被重新拉起。
+
+    powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode PostBrowserValidate
+
+默认等待 10 秒，也可以指定：
+
+    powershell -ExecutionPolicy Bypass -File scripts\claude_cleanup_windows.ps1 -Mode PostBrowserValidate -BrowserWaitSeconds 20
+
+## 最终验收门槛
+
+完整卸载的最终 PASS 必须按顺序满足：
+
+1. 即时 Validate 中以下项目全部通过：
+   - 无 claude.exe
+   - where claude 为空
+   - 无 Claude Desktop Appx/MSIX
+   - 无 CoworkVMService*
+   - 无 Claude Code Native Messaging 注册
+   - 无 Native Host 文件目录
+2. FullUninstall 或 PrepareRebootValidation 已写入重启前基线。
+3. 用户真实重启 Windows。
+4. PostRebootValidate 返回 PASS。
+5. 用户真实打开 Chrome。
+6. PostBrowserValidate 返回 PASS，确认：
+   - 没有 claude.exe --chrome-native-host
+   - Native Messaging 注册没有恢复
+   - Native Host 文件没有恢复
+
+如果没有真实重启，PostRebootValidate 必须返回 NOT_READY，不能把当前状态冒充为冷启动验证结果。
+
+为避免 Windows CIM 的亚秒级 BootTime 精度抖动造成误判，只有当前 BootTime 比基线至少晚 5 秒，才认定为发生过真实重启。
+
+如果 Chrome 没有真正运行，PostBrowserValidate 必须返回 NOT_READY。
+
+## 为什么不把“重新启动 Claude 本体”作为卸载验收
+
+FullUninstall 的目标就是让 Claude Code / Desktop 不再存在，因此成功卸载后没有 Claude 本体可启动。
+
+为了验证“有没有东西被系统重新带起来”，更合理的回归是：
+
+- 真实重启 Windows，验证服务、Appx、命令和 Native Host 不回生；
+- 再真实启动 Chrome，验证 Claude in Chrome 不会重新拉起 claude.exe --chrome-native-host。
+
+如果用户以后重新安装 Claude，应在安装后重新运行 Audit / Validate，这属于“重装后的环境验收”，不是“卸载成功”的必要条件。
 
 ## Claude Code / NVM4W 规则
 
@@ -56,6 +113,7 @@ where claude 可能同时显示 D:\nvm4w\nodejs\claude.cmd 和 D:\nvm\<version>\
 只有当命令行明确包含 --chrome-native-host 时，脚本才允许结束这个子进程。普通交互式 claude.exe 存在时必须停止写操作并要求用户正常退出。
 
 卸载 Code 后清理：
+
 - %USERPROFILE%\.claude\chrome
 - %APPDATA%\Claude Code\ChromeNativeHost
 - Chrome / Chromium / Edge 的 com.anthropic.claude_code_browser_extension Native Messaging 注册
@@ -65,12 +123,14 @@ where claude 可能同时显示 D:\nvm4w\nodejs\claude.cmd 和 D:\nvm\<version>\
 ## Claude Desktop 规则
 
 可能同时存在：
+
 - Claude，SignatureKind=Developer
 - AnthropicPBC.Claude，Microsoft Store 包
 
 两套安装可以各自注册 CoworkVMService*。
 
 标准流程：
+
 1. 枚举所有 Claude Appx/MSIX 包。
 2. 停止 CoworkVMService*。
 3. 对当前用户逐包 Remove-AppxPackage。
@@ -81,6 +141,7 @@ where claude 可能同时显示 D:\nvm4w\nodejs\claude.cmd 和 D:\nvm\<version>\
 ## 可再生数据
 
 普通缓存候选：
+
 - %USERPROFILE%\.claude\cache
 - %USERPROFILE%\.claude\stats-cache.json
 - %USERPROFILE%\.claude\telemetry
@@ -97,6 +158,7 @@ where claude 可能同时显示 D:\nvm4w\nodejs\claude.cmd 和 D:\nvm\<version>\
 - %LOCALAPPDATA%\Claude\Logs
 
 IncludeLargeRuntime 额外处理：
+
 - %APPDATA%\Claude\vm_bundles
 - %APPDATA%\Claude\claude-code
 - %APPDATA%\Claude\claude-code-vm
@@ -105,27 +167,49 @@ IncludeLargeRuntime 额外处理：
 
 ## 本地登录态
 
-FullUninstall 默认直接移除以下废弃本地登录态，不再复制到备份目录：
+FullUninstall 默认直接移除以下废弃本地登录态，不复制到备份目录：
+
 - %USERPROFILE%\.claude\.credentials.json
 - %APPDATA%\Claude\buddy-tokens.json
 
 脚本不输出其内容，也不保留这些旧登录材料的副本。
 
-## 备份与验收
+## 备份与验收基线
 
-所有写操作前创建：
+写操作前的普通保护快照：
 
     %USERPROFILE%\.claude-cleanup-backups\<timestamp>\
 
+重启回归基线：
+
+    %USERPROFILE%\.claude-cleanup-validation\latest-reboot-baseline.json
+
+基线记录：
+
+- 创建时间
+- 当时 Windows BootTime
+- 清理后的即时状态
+- 关键配置 SHA256
+- Skills / Plugins / Projects 的文件数量与体积
+
+PostRebootValidate 会将重启后的状态与这份基线比较。
+
 只复制普通小体积配置；旧登录材料默认不备份。Skills/Plugins/Projects 不重复复制，以文件数量、体积和关键配置 SHA256 做前后核验。
 
-结果必须分别报告：
+## 结果报告
+
+必须分别报告：
+
 - 已卸载内容
 - 已清理内容
 - 释放空间
 - 保留资产
 - 非阻塞残留
-- 验收状态
+- 即时验收状态
+- 重启后验收状态
+- Chrome 启动后回生验收状态
 
-任何失败都必须标记为部分完成。
+任何失败必须标记为部分完成。
+
+只有 PostRebootValidate 和 PostBrowserValidate 都 PASS，才能使用“最终验收通过”这个结论。
 
