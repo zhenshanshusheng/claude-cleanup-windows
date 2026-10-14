@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.1 - 2026-10-14
+
+### Validated
+
+- 在真实 Windows 冷启动后完成 PostRebootValidate，结果为 PASS。
+- 基线与当前 Windows BootTime 相差约 165935.5 秒，确认不是 CIM 精度抖动导致的假重启。
+- 重启后确认无 Claude 进程、无 where claude、无 Desktop 包、无 Cowork 服务、无 Native Host 注册/路径回生。
+- 保护资产与关键配置指纹未发生变化。
+- Chrome 实际运行并等待 15 秒后完成 PostBrowserValidate，结果为 PASS。
+- 未重新出现 claude.exe --chrome-native-host。
+- v1.1 的两级最终验收链路由“功能已实现”升级为“真实环境已验证”。
+
 ## v1.1.0 - 2026-10-12
 
 ### Added
@@ -33,4 +45,5 @@
 - 支持 NVM4W 双路径识别。
 - 支持 Claude in Chrome Native Host 识别和清理。
 - 支持重复 Claude Desktop Appx/MSIX 与 Cowork 服务处理。
+
 

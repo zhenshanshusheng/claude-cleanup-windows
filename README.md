@@ -174,3 +174,23 @@ MIT
 
 欢迎 Issue / PR。
 
+
+## 实机冷启动验证
+
+v1.1 的冷启动验收流程已经在真实 Windows 机器上完成一次完整回归，而不是只做代码级测试。
+
+2026-10-14 验证结果：
+
+- Windows 已发生真实重启，基线 BootTime 与当前 BootTime 相差约 165935.5 秒。
+- PostRebootValidate：PASS。
+- 重启后无 claude.exe。
+- where claude 为空。
+- 无 Claude Desktop Appx/MSIX 包。
+- 无 CoworkVMService*。
+- 无 Claude Code Native Messaging 注册。
+- 无 Native Host 路径回生。
+- Skills / Plugins / Projects 与关键配置指纹保持一致。
+- Chrome 处于实际运行状态，等待 15 秒后执行 PostBrowserValidate：PASS。
+- 未重新出现 claude.exe --chrome-native-host。
+
+因此这套“即时验收 → Windows 冷启动 → Chrome 启动后回生检查”的最终验收链路已经有实机证据。
